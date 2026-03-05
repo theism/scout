@@ -4,51 +4,22 @@ API views for data dictionary and workspace schema management.
 
 import logging
 
-from django.db.models import F
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.projects.workspace_resolver import resolve_workspace
+
 logger = logging.getLogger(__name__)
 
 
-def _resolve_membership(request):
-    """Return the most-recently-selected TenantMembership for the authenticated user."""
-    from apps.users.models import TenantMembership
-
-    return (
-        TenantMembership.objects.filter(user=request.user)
-        .order_by(F("last_selected_at").desc(nulls_last=True))
-        .first()
-    )
-
-
-def _resolve_workspace(request):
-    """Resolve the active TenantWorkspace for the authenticated user."""
-    from apps.projects.models import TenantWorkspace
-
-    membership = _resolve_membership(request)
-    if not membership:
-        return None, Response(
-            {"error": "No tenant selected. Please select a domain first."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    workspace, _ = TenantWorkspace.objects.get_or_create(
-        tenant=membership.tenant,
-    )
-    return workspace, None
-
-
-def _resolve_tenant_schema(membership):
-    """Return the active TenantSchema for the given TenantMembership, or None.
-
-    Matches by tenant FK so that multiple users in the same tenant see the same shared schema.
-    """
+def _resolve_tenant_schema(tenant):
+    """Return the active TenantSchema for the given tenant, or None."""
     from apps.projects.models import SchemaState, TenantSchema
 
     return TenantSchema.objects.filter(
-        tenant_membership__tenant=membership.tenant,
+        tenant_membership__tenant=tenant,
         state__in=[SchemaState.ACTIVE, SchemaState.MATERIALIZING],
     ).first()
 
@@ -224,13 +195,12 @@ class DataDictionaryView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        workspace, err = _resolve_workspace(request)
+    def get(self, request, tenant_id):
+        workspace, err = resolve_workspace(request, tenant_id)
         if err:
             return err
 
-        membership = _resolve_membership(request)
-        tenant_schema = _resolve_tenant_schema(membership) if membership else None
+        tenant_schema = _resolve_tenant_schema(workspace.tenant)
 
         if tenant_schema is not None:
             return self._get_from_pipeline(workspace, tenant_schema)
@@ -325,8 +295,8 @@ class RefreshSchemaView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        workspace, err = _resolve_workspace(request)
+    def post(self, request, tenant_id):
+        workspace, err = resolve_workspace(request, tenant_id)
         if err:
             return err
 
@@ -343,9 +313,9 @@ class TableDetailView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def _get_table_data(self, workspace, membership, qualified_name):
+    def _get_table_data(self, workspace, tenant, qualified_name):
         """Return table data dict, sourcing from pipeline models or legacy JSONField."""
-        tenant_schema = _resolve_tenant_schema(membership) if membership else None
+        tenant_schema = _resolve_tenant_schema(tenant) if tenant else None
         if tenant_schema is not None:
             parts = qualified_name.split(".", 1)
             if len(parts) == 2:
@@ -397,13 +367,12 @@ class TableDetailView(APIView):
             entry["source_metadata"] = source_metadata
         return entry
 
-    def get(self, request, qualified_name):
-        workspace, err = _resolve_workspace(request)
+    def get(self, request, tenant_id, qualified_name):
+        workspace, err = resolve_workspace(request, tenant_id)
         if err:
             return err
 
-        membership = _resolve_membership(request)
-        table_data = self._get_table_data(workspace, membership, qualified_name)
+        table_data = self._get_table_data(workspace, workspace.tenant, qualified_name)
         if table_data is None:
             return Response({"error": "Table not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -415,13 +384,12 @@ class TableDetailView(APIView):
 
         return Response(response_data)
 
-    def put(self, request, qualified_name):
-        workspace, err = _resolve_workspace(request)
+    def put(self, request, tenant_id, qualified_name):
+        workspace, err = resolve_workspace(request, tenant_id)
         if err:
             return err
 
-        membership = _resolve_membership(request)
-        table_data = self._get_table_data(workspace, membership, qualified_name)
+        table_data = self._get_table_data(workspace, workspace.tenant, qualified_name)
         if table_data is None:
             return Response({"error": "Table not found."}, status=status.HTTP_404_NOT_FOUND)
 

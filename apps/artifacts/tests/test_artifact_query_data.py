@@ -33,8 +33,28 @@ def member_user(db, workspace):
 
 
 @pytest.fixture
+def membership(db, workspace, member_user):
+    return TenantMembership.objects.get(user=member_user, tenant=workspace.tenant)
+
+
+@pytest.fixture
 def other_user(db):
     return User.objects.create_user(email="other@example.com", password="pass")
+
+
+@pytest.fixture
+def other_workspace(db):
+    from apps.users.models import Tenant
+
+    tenant = Tenant.objects.create(
+        provider="commcare", external_id="other-domain", canonical_name="Other Domain"
+    )
+    return TenantWorkspace.objects.create(tenant=tenant)
+
+
+@pytest.fixture
+def other_membership(db, other_workspace, other_user):
+    return TenantMembership.objects.create(user=other_user, tenant=other_workspace.tenant)
 
 
 def _make_auth_client(user):
@@ -111,9 +131,12 @@ MOCK_DAILY_RESULT = {
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_returns_query_results_for_live_artifact(live_artifact, member_client):
+async def test_returns_query_results_for_live_artifact(live_artifact, member_client, membership):
     """Happy path: queries are executed and results returned with correct shape."""
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": live_artifact.id})
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": membership.id, "artifact_id": live_artifact.id},
+    )
 
     with (
         patch(
@@ -140,9 +163,14 @@ async def test_returns_query_results_for_live_artifact(live_artifact, member_cli
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_returns_empty_queries_for_static_artifact(static_artifact, member_client):
+async def test_returns_empty_queries_for_static_artifact(
+    static_artifact, member_client, membership
+):
     """Artifacts with no source_queries return empty queries list."""
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": static_artifact.id})
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": membership.id, "artifact_id": static_artifact.id},
+    )
     response = await member_client.get(url)
 
     assert response.status_code == 200
@@ -153,27 +181,33 @@ async def test_returns_empty_queries_for_static_artifact(static_artifact, member
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_unauthenticated_returns_401(live_artifact):
+async def test_unauthenticated_returns_401(live_artifact, membership):
     """Unauthenticated request returns 401."""
     client = AsyncClient()
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": live_artifact.id})
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": membership.id, "artifact_id": live_artifact.id},
+    )
     response = await client.get(url)
     assert response.status_code == 401
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_non_member_returns_403(live_artifact, other_client):
-    """User without workspace membership returns 403."""
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": live_artifact.id})
+async def test_non_member_returns_404(live_artifact, other_client, other_membership):
+    """User from a different workspace cannot access artifacts scoped to this workspace."""
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": other_membership.id, "artifact_id": live_artifact.id},
+    )
     response = await other_client.get(url)
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_no_workspace_returns_403(member_user, member_client):
-    """Artifact with no workspace returns 403 for non-superusers."""
+async def test_no_workspace_returns_404(member_user, member_client, membership):
+    """Artifact with no workspace is not found in the scoped workspace."""
     artifact = await Artifact.objects.acreate(
         workspace=None,
         created_by=member_user,
@@ -183,16 +217,22 @@ async def test_no_workspace_returns_403(member_user, member_client):
         conversation_id="t",
         source_queries=[{"name": "q", "sql": "SELECT 1"}],
     )
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": artifact.id})
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": membership.id, "artifact_id": artifact.id},
+    )
     response = await member_client.get(url)
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_tenant_context_error_returns_error_query(live_artifact, member_client):
+async def test_tenant_context_error_returns_error_query(live_artifact, member_client, membership):
     """If load_tenant_context fails (no schema), return error response."""
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": live_artifact.id})
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": membership.id, "artifact_id": live_artifact.id},
+    )
 
     with patch(
         "apps.artifacts.views.load_tenant_context",
@@ -208,9 +248,12 @@ async def test_tenant_context_error_returns_error_query(live_artifact, member_cl
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_individual_query_failure_continues(live_artifact, member_client):
+async def test_individual_query_failure_continues(live_artifact, member_client, membership):
     """A failed query includes an error entry; other queries still execute."""
-    url = reverse("artifacts:query_data", kwargs={"artifact_id": live_artifact.id})
+    url = reverse(
+        "artifacts:query_data",
+        kwargs={"tenant_id": membership.id, "artifact_id": live_artifact.id},
+    )
 
     error_result = {"success": False, "error": {"code": "QUERY_TIMEOUT", "message": "Timed out"}}
 
