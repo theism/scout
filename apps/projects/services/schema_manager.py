@@ -7,6 +7,7 @@ Creates and tears down tenant-scoped PostgreSQL schemas.
 from __future__ import annotations
 
 import logging
+import uuid
 
 import psycopg
 import psycopg.sql
@@ -91,8 +92,44 @@ class SchemaManager:
         )
         return ts
 
+    def create_physical_schema(self, tenant_schema: TenantSchema) -> None:
+        """Create the physical PostgreSQL schema for an existing TenantSchema record.
+
+        Idempotent — uses ``CREATE SCHEMA IF NOT EXISTS``. The caller is
+        responsible for updating ``tenant_schema.state`` on success or failure.
+        """
+        conn = get_managed_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                psycopg.sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                    psycopg.sql.Identifier(tenant_schema.schema_name)
+                )
+            )
+            cursor.close()
+        finally:
+            conn.close()
+
+    def create_refresh_schema(self, tenant) -> TenantSchema:
+        """Create a new TenantSchema record for a background refresh.
+
+        Returns a PROVISIONING record with a unique schema name. The caller
+        is responsible for creating the physical schema and dispatching the
+        Celery task (refresh_tenant_schema) to run the materialization.
+        """
+        schema_name = f"{self._sanitize_schema_name(tenant.external_id)}_r{uuid.uuid4().hex[:8]}"
+        return TenantSchema.objects.create(
+            tenant=tenant,
+            schema_name=schema_name,
+            state=SchemaState.PROVISIONING,
+        )
+
     def teardown(self, tenant_schema: TenantSchema) -> None:
-        """Drop a tenant's schema and mark it as torn down."""
+        """Drop a tenant's schema from the managed database.
+
+        Only performs the physical DROP SCHEMA — callers are responsible for
+        updating the model state (EXPIRED or FAILED) after this returns.
+        """
         conn = get_managed_db_connection()
         try:
             cursor = conn.cursor()
@@ -104,9 +141,6 @@ class SchemaManager:
             cursor.close()
         finally:
             conn.close()
-
-        tenant_schema.state = SchemaState.TEARDOWN
-        tenant_schema.save(update_fields=["state"])
 
     def _sanitize_schema_name(self, tenant_id: str) -> str:
         """Convert a tenant_id to a valid PostgreSQL schema name."""
