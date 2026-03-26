@@ -73,6 +73,11 @@ def get_lineage_chain(
                 "description": current.description,
             }
         )
-        current = current.replaces
+        # Follow replaces chain scoped to visible assets only, preventing
+        # cross-tenant information disclosure via unscoped FK traversal.
+        next_id = current.replaces_id
+        if next_id is None:
+            break
+        current = TransformationAsset.objects.filter(q, id=next_id).first()
 
     return chain

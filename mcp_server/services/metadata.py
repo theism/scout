@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from django.db import models
+
 from apps.workspaces.models import MaterializationRun
 from mcp_server.pipeline_registry import PipelineConfig
 from mcp_server.services.query import _execute_sync_parameterized
@@ -199,15 +201,25 @@ def transformation_aware_list_tables(
         # No transformation assets — use existing pipeline-based listing
         return pipeline_list_tables(tenant_schema, pipeline_config)
 
-    # Build set of replaced table names (walk replaces chains)
+    # Build set of replaced table names (walk replaces chains, scoped to
+    # visible assets to prevent cross-tenant information disclosure).
+    from apps.transformations.models import TransformationAsset as _TA
+
+    visible_q = models.Q(tenant_id__in=tenant_ids)
+    if workspace_id:
+        visible_q = visible_q | models.Q(workspace_id=workspace_id)
+
     replaced_names = set()
     for asset in terminal_assets:
-        current = asset.replaces
+        next_id = asset.replaces_id
         visited = set()
-        while current and current.id not in visited:
-            visited.add(current.id)
-            replaced_names.add(current.name)
-            current = current.replaces
+        while next_id and next_id not in visited:
+            visited.add(next_id)
+            upstream = _TA.objects.filter(visible_q, id=next_id).first()
+            if upstream is None:
+                break
+            replaced_names.add(upstream.name)
+            next_id = upstream.replaces_id
 
     # Start with raw tables, excluding replaced ones and terminal asset names
     raw_tables = pipeline_list_tables(tenant_schema, pipeline_config)
