@@ -162,6 +162,7 @@ class TransformationRunViewSet(viewsets.ReadOnlyModelViewSet):
             workspace = Workspace.objects.filter(
                 id=workspace_id,
                 memberships__user=request.user,
+                memberships__role__in=[WorkspaceRole.READ_WRITE, WorkspaceRole.MANAGE],
             ).first()
             if not workspace:
                 raise PermissionDenied(

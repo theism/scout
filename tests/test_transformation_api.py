@@ -451,6 +451,24 @@ def test_trigger_foreign_workspace_forbidden(api_client, user, tenant, tenant_me
 
 
 @pytest.mark.django_db
+def test_trigger_workspace_read_role_forbidden(api_client, read_user, tenant, workspace):
+    """User with read-only workspace role cannot trigger a run with that workspace."""
+    from apps.users.models import TenantMembership
+    from apps.workspaces.models import TenantSchema
+
+    TenantMembership.objects.create(user=read_user, tenant=tenant)
+    TenantSchema.objects.create(tenant=tenant, schema_name="test_schema", state="active")
+
+    api_client.force_login(read_user)
+    resp = api_client.post(
+        "/api/transformations/runs/trigger/",
+        {"tenant_id": str(tenant.id), "workspace_id": str(workspace.id)},
+        format="json",
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
 def test_trigger_without_active_schema(api_client, user, tenant, tenant_membership):
     api_client.force_login(user)
     resp = api_client.post(
