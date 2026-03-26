@@ -97,6 +97,10 @@ class TransformationAsset(models.Model):
         container = self.tenant or self.workspace
         return f"{self.scope}:{self.name} ({container})"
 
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     def clean(self):
         if self.scope in (TransformationScope.SYSTEM, TransformationScope.TENANT):
             if not self.tenant_id:

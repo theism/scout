@@ -144,11 +144,8 @@ def run_dbt_test(
         dbt = dbtRunner()
         res = dbt.invoke(cli_args)
 
-    if not res.success:
-        error_msg = str(res.exception) if res.exception else "dbt test failed"
-        logger.error("dbt test failed: %s", error_msg)
-        return {"success": False, "tests": {}, "error": error_msg}
-
+    # Always parse results — dbt sets success=False on test failures but still
+    # populates res.result with per-test RunResult objects.
     # Group test results by the model they test.
     # Schema test nodes expose ``attached_node`` = "model.<project>.<model_name>".
     test_results: dict[str, list[dict]] = {}
@@ -164,6 +161,11 @@ def run_dbt_test(
         }
         if model_name:
             test_results.setdefault(model_name, []).append(entry)
+
+    if not res.success:
+        error_msg = str(res.exception) if res.exception else "dbt test failed"
+        logger.error("dbt test failed: %s", error_msg)
+        return {"success": False, "tests": test_results, "error": error_msg}
 
     logger.info(
         "dbt test complete: %d tests across %d models",
