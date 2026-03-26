@@ -58,16 +58,27 @@ class TransformationAssetViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         if serializer.instance.scope == TransformationScope.SYSTEM:
             raise PermissionDenied("System assets cannot be modified.")
+        instance = serializer.instance
+        self._check_write_permission(
+            {"workspace": instance.workspace, "tenant": instance.tenant}
+        )
         serializer.save()
 
     def perform_destroy(self, instance):
         if instance.scope == TransformationScope.SYSTEM:
             raise PermissionDenied("System assets cannot be deleted.")
+        self._check_write_permission(
+            {"workspace": instance.workspace, "tenant": instance.tenant}
+        )
         instance.delete()
 
     def _check_write_permission(self, data):
         """Verify the user has write access to the target container."""
         user = self.request.user
+        if data.get("tenant"):
+            is_member = user.tenant_memberships.filter(tenant=data["tenant"]).exists()
+            if not is_member:
+                raise PermissionDenied("You are not a member of this tenant.")
         if data.get("workspace"):
             has_write = user.workspace_memberships.filter(
                 workspace=data["workspace"],
@@ -130,8 +141,11 @@ class TransformationRunViewSet(viewsets.ReadOnlyModelViewSet):
 
         try:
             tenant = Tenant.objects.get(id=tenant_id)
-        except Tenant.DoesNotExist:
+        except (Tenant.DoesNotExist, ValueError):
             return Response({"error": "Tenant not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if not request.user.tenant_memberships.filter(tenant=tenant).exists():
+            raise PermissionDenied("You are not a member of this tenant.")
 
         ts = TenantSchema.objects.filter(tenant=tenant, state="active").first()
         if not ts:

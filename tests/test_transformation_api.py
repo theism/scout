@@ -166,6 +166,33 @@ def test_create_workspace_asset_read_role_forbidden(api_client, read_user, works
 
 
 # ---------------------------------------------------------------------------
+# Create asset - cross-tenant/workspace authorization tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_create_tenant_asset_for_foreign_tenant_forbidden(api_client, user, tenant_membership):
+    """User cannot create a tenant-scoped asset for a tenant they don't belong to."""
+    from apps.users.models import Tenant
+
+    foreign_tenant = Tenant.objects.create(
+        provider="commcare", external_id="foreign-domain", canonical_name="Foreign"
+    )
+    api_client.force_login(user)
+    resp = api_client.post(
+        "/api/transformations/assets/",
+        {
+            "name": "foreign_asset",
+            "scope": "tenant",
+            "tenant": str(foreign_tenant.id),
+            "sql_content": "SELECT 1",
+        },
+        format="json",
+    )
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # Update asset tests
 # ---------------------------------------------------------------------------
 
@@ -205,6 +232,24 @@ def test_update_system_asset_forbidden(api_client, user, tenant, tenant_membersh
     assert resp.status_code == 403
 
 
+@pytest.mark.django_db
+def test_update_workspace_asset_read_role_forbidden(api_client, read_user, workspace):
+    """User with read role cannot update workspace assets."""
+    asset = TransformationAsset.objects.create(
+        name="ws_readonly",
+        scope=TransformationScope.WORKSPACE,
+        workspace=workspace,
+        sql_content="SELECT 1",
+    )
+    api_client.force_login(read_user)
+    resp = api_client.patch(
+        f"/api/transformations/assets/{asset.id}/",
+        {"sql_content": "SELECT 2"},
+        format="json",
+    )
+    assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # Delete asset tests
 # ---------------------------------------------------------------------------
@@ -232,6 +277,20 @@ def test_delete_system_asset_forbidden(api_client, user, tenant, tenant_membersh
         sql_content="SELECT 1",
     )
     api_client.force_login(user)
+    resp = api_client.delete(f"/api/transformations/assets/{asset.id}/")
+    assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+def test_delete_workspace_asset_read_role_forbidden(api_client, read_user, workspace):
+    """User with read role cannot delete workspace assets."""
+    asset = TransformationAsset.objects.create(
+        name="ws_nodelete",
+        scope=TransformationScope.WORKSPACE,
+        workspace=workspace,
+        sql_content="SELECT 1",
+    )
+    api_client.force_login(read_user)
     resp = api_client.delete(f"/api/transformations/assets/{asset.id}/")
     assert resp.status_code == 403
 
@@ -322,6 +381,23 @@ def test_trigger_run(api_client, user, tenant, tenant_membership):
         )
     assert resp.status_code == 201
     assert resp.data["status"] == "completed"
+
+
+@pytest.mark.django_db
+def test_trigger_foreign_tenant_forbidden(api_client, user, tenant_membership):
+    """User cannot trigger a run for a tenant they don't belong to."""
+    from apps.users.models import Tenant
+
+    foreign_tenant = Tenant.objects.create(
+        provider="commcare", external_id="foreign-domain", canonical_name="Foreign"
+    )
+    api_client.force_login(user)
+    resp = api_client.post(
+        "/api/transformations/runs/trigger/",
+        {"tenant_id": str(foreign_tenant.id)},
+        format="json",
+    )
+    assert resp.status_code == 403
 
 
 @pytest.mark.django_db
