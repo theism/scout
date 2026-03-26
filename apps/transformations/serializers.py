@@ -22,6 +22,16 @@ class TransformationAssetSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_by", "created_at", "updated_at"]
 
+    def get_extra_kwargs(self):
+        """Make scope, tenant, and workspace immutable after creation."""
+        extra_kwargs = super().get_extra_kwargs()
+        if self.instance is not None:
+            for field_name in ("scope", "tenant", "workspace"):
+                kwargs = extra_kwargs.get(field_name, {})
+                kwargs["read_only"] = True
+                extra_kwargs[field_name] = kwargs
+        return extra_kwargs
+
 
 class TransformationAssetRunSerializer(serializers.ModelSerializer):
     asset_name = serializers.CharField(source="asset.name", read_only=True)

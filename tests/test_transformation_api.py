@@ -250,6 +250,32 @@ def test_update_workspace_asset_read_role_forbidden(api_client, read_user, works
     assert resp.status_code == 403
 
 
+@pytest.mark.django_db
+def test_update_cannot_reassign_container(api_client, user, tenant, tenant_membership, workspace):
+    """PATCH cannot change scope, tenant, or workspace (immutable after creation)."""
+    from apps.users.models import Tenant
+
+    asset = TransformationAsset.objects.create(
+        name="locked_asset",
+        scope=TransformationScope.TENANT,
+        tenant=tenant,
+        sql_content="SELECT 1",
+    )
+    foreign_tenant = Tenant.objects.create(
+        provider="commcare", external_id="foreign", canonical_name="Foreign"
+    )
+    api_client.force_login(user)
+    resp = api_client.patch(
+        f"/api/transformations/assets/{asset.id}/",
+        {"tenant": str(foreign_tenant.id)},
+        format="json",
+    )
+    assert resp.status_code == 200
+    asset.refresh_from_db()
+    # tenant should not have changed — field is read-only on update
+    assert asset.tenant_id == tenant.id
+
+
 # ---------------------------------------------------------------------------
 # Delete asset tests
 # ---------------------------------------------------------------------------
@@ -405,6 +431,23 @@ def test_trigger_without_tenant_id(api_client, user, tenant_membership):
     api_client.force_login(user)
     resp = api_client.post("/api/transformations/runs/trigger/", {}, format="json")
     assert resp.status_code == 400
+
+
+@pytest.mark.django_db
+def test_trigger_foreign_workspace_forbidden(api_client, user, tenant, tenant_membership):
+    """User cannot trigger a run with a workspace they don't belong to."""
+    from apps.workspaces.models import TenantSchema, Workspace
+
+    TenantSchema.objects.create(tenant=tenant, schema_name="test_schema", state="active")
+    foreign_ws = Workspace.objects.create(name="Foreign WS")
+
+    api_client.force_login(user)
+    resp = api_client.post(
+        "/api/transformations/runs/trigger/",
+        {"tenant_id": str(tenant.id), "workspace_id": str(foreign_ws.id)},
+        format="json",
+    )
+    assert resp.status_code == 403
 
 
 @pytest.mark.django_db

@@ -159,7 +159,14 @@ class TransformationRunViewSet(viewsets.ReadOnlyModelViewSet):
         if workspace_id:
             from apps.workspaces.models import Workspace
 
-            workspace = Workspace.objects.filter(id=workspace_id).first()
+            workspace = Workspace.objects.filter(
+                id=workspace_id,
+                memberships__user=request.user,
+            ).first()
+            if not workspace:
+                raise PermissionDenied(
+                    "Workspace not found or you are not a member."
+                )
 
         run = run_transformation_pipeline(
             tenant=tenant,
