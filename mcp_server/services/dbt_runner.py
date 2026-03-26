@@ -114,3 +114,45 @@ def run_dbt(
 
     logger.info("dbt run complete: %s", model_results)
     return {"success": True, "models": model_results}
+
+
+def run_dbt_test(
+    dbt_project_dir: str,
+    profiles_dir: str,
+    models: list[str] | None = None,
+) -> dict:
+    """Run dbt tests via the programmatic Python API.
+
+    Args:
+        dbt_project_dir: Directory containing dbt_project.yml.
+        profiles_dir: Directory containing the generated profiles.yml.
+        models: Optional list of model names to scope tests to.
+
+    Returns:
+        {"success": bool, "tests": {test_unique_id: {"status": str, "message": str}}, "error": str | None}
+    """
+    cli_args = ["test", "--project-dir", dbt_project_dir, "--profiles-dir", profiles_dir]
+    if models:
+        cli_args.extend(["--select", " ".join(models)])
+
+    logger.info("Invoking dbt test: %s", " ".join(cli_args))
+
+    with _dbt_lock:
+        dbt = dbtRunner()
+        res = dbt.invoke(cli_args)
+
+    if not res.success:
+        error_msg = str(res.exception) if res.exception else "dbt test failed"
+        logger.error("dbt test failed: %s", error_msg)
+        return {"success": False, "tests": {}, "error": error_msg}
+
+    test_results = {}
+    for r in res.result or []:
+        if hasattr(r, "node") and hasattr(r, "status"):
+            test_results[r.node.unique_id] = {
+                "status": str(r.status),
+                "message": getattr(r, "message", ""),
+            }
+
+    logger.info("dbt test complete: %d tests", len(test_results))
+    return {"success": True, "tests": test_results, "error": None}

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import pathlib
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -156,15 +155,21 @@ def run_pipeline(
     run.save(update_fields=["state"])
     transform_result: dict = {}
 
-    if pipeline.transforms and pipeline.dbt_models:
-        report("Running DBT transforms...")
+    # Check if there are any TransformationAssets to execute
+    from apps.transformations.models import TransformationAsset
+
+    has_assets = TransformationAsset.objects.filter(tenant=tenant_membership.tenant).exists()
+    if has_assets:
+        report("Running transforms...")
         try:
-            transform_result = _run_transform_phase(pipeline, schema_name)
+            transform_result = _run_transform_phase(
+                pipeline, schema_name, tenant=tenant_membership.tenant
+            )
         except Exception as e:
             logger.error("Transform phase failed for schema %s: %s", schema_name, e)
             transform_result = {"error": str(e)}
     else:
-        report("No DBT transforms configured — skipping")
+        report("No transforms configured — skipping")
 
     # ── 5. COMPLETE ───────────────────────────────────────────────────────────
     # Conditional UPDATE: only transition to COMPLETED if still in TRANSFORMING
@@ -290,23 +295,23 @@ def _load_connect_source(
     return writer_fn(loader.load_pages(), schema_name, conn)
 
 
-def _run_transform_phase(pipeline: PipelineConfig, schema_name: str) -> dict:
-    import tempfile
+def _run_transform_phase(pipeline: PipelineConfig, schema_name: str, tenant=None) -> dict:
+    """Run the three-stage transformation pipeline using TransformationAsset records."""
+    from apps.transformations.services.executor import run_transformation_pipeline
 
-    from django.conf import settings
+    run = run_transformation_pipeline(
+        tenant=tenant,
+        schema_name=schema_name,
+    )
 
-    from mcp_server.services.dbt_runner import generate_profiles_yml, run_dbt
-
-    db_url = getattr(settings, "MANAGED_DATABASE_URL", "")
-    repo_root = pathlib.Path(__file__).parent.parent.parent
-    dbt_project_dir = str(repo_root / pipeline.transforms.dbt_project)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        profiles_path = pathlib.Path(tmpdir) / "profiles.yml"
-        generate_profiles_yml(output_path=profiles_path, schema_name=schema_name, db_url=db_url)
-        return run_dbt(
-            dbt_project_dir=dbt_project_dir, profiles_dir=tmpdir, models=pipeline.dbt_models
-        )
+    result = {
+        "run_id": str(run.id),
+        "status": run.status,
+        "asset_count": run.asset_runs.count(),
+    }
+    if run.error_message:
+        result["error"] = run.error_message
+    return result
 
 
 # ── Table writers ──────────────────────────────────────────────────────────────
