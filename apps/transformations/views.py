@@ -153,6 +153,7 @@ class TransformationRunViewSet(viewsets.ReadOnlyModelViewSet):
                 {"error": "No active schema for this tenant"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        ts.touch()
 
         workspace = None
         workspace_id = request.data.get("workspace_id")
