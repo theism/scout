@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 
 
@@ -21,6 +22,12 @@ class TransformationAsset(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(
         max_length=255,
+        validators=[
+            RegexValidator(
+                regex=r"^[a-z][a-z0-9_]*$",
+                message="Name must be a valid dbt model name: lowercase letters, digits, and underscores, starting with a letter.",
+            ),
+        ],
         help_text="dbt model name. Must be unique within scope+container.",
     )
     description = models.TextField(blank=True)
@@ -89,6 +96,10 @@ class TransformationAsset(models.Model):
     def __str__(self):
         container = self.tenant or self.workspace
         return f"{self.scope}:{self.name} ({container})"
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     def clean(self):
         if self.scope in (TransformationScope.SYSTEM, TransformationScope.TENANT):

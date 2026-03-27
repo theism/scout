@@ -12,12 +12,6 @@ sources:
 metadata_discovery:
   description: "Extract application structure, case types, and form definitions"
 
-transforms:
-  dbt_project: transforms/commcare
-  models:
-    - stg_cases
-    - stg_forms
-
 relationships:
   - from_table: raw_forms
     from_column: case_ids

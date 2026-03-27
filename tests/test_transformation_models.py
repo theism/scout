@@ -2,7 +2,6 @@
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db.utils import IntegrityError
 
 from apps.transformations.models import (
     AssetRunStatus,
@@ -57,7 +56,7 @@ def test_workspace_scoped_asset_with_workspace_succeeds(workspace):
 
 @pytest.mark.django_db
 def test_asset_with_both_tenant_and_workspace_fails(tenant, workspace):
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValidationError):
         TransformationAsset.objects.create(
             name="bad_asset",
             scope=TransformationScope.SYSTEM,
@@ -69,7 +68,7 @@ def test_asset_with_both_tenant_and_workspace_fails(tenant, workspace):
 
 @pytest.mark.django_db
 def test_asset_with_neither_tenant_nor_workspace_fails():
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValidationError):
         TransformationAsset.objects.create(
             name="no_container",
             scope=TransformationScope.SYSTEM,
@@ -121,7 +120,7 @@ def test_unique_constraint_same_name_scope_tenant(tenant):
         tenant=tenant,
         sql_content="SELECT 1",
     )
-    with pytest.raises(IntegrityError):
+    with pytest.raises(ValidationError):
         TransformationAsset.objects.create(
             name="stg_cases",
             scope=TransformationScope.SYSTEM,
